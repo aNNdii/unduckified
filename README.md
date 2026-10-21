@@ -14,9 +14,11 @@ https://s.dunkirk.sh?q=%s
 
 ## Container image
 
-GitHub Actions builds the image for every pull request and publishes
-`ghcr.io/anndii/unduckified:latest` after successful builds on `main` or a
-manual workflow run.
+GitHub Actions builds the image for every pull request. Every other run first
+syncs `main` with the upstream repository and then publishes
+`ghcr.io/anndii/unduckified:latest` from the synced `main`. Runs happen on
+pushes to `main`, on manual dispatch and hourly on a schedule; scheduled runs
+skip the build when upstream has nothing new.
 
 The image serves the static client on port 80. It does not include the
 Cloudflare Pages `/suggest` function or the first-request edge redirect, so

@@ -1,46 +1,79 @@
 name: Container image
 
+# Every run except pull requests first syncs main with the upstream repository
+# and then builds and publishes the image from the synced main. Scheduled runs
+# skip the build when upstream had nothing new.
+
 on:
   pull_request:
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
   group: container-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   container:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Sync main with upstream
+        id: sync
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          response="$(gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/merge-upstream" \
+            --field branch=main)"
+          merge_type="$(jq --exit-status --raw-output '.merge_type' <<< "${response}")"
+          printf '%s\n' "$(jq --raw-output '.message' <<< "${response}")"
+          if [[ "${GITHUB_EVENT_NAME}" == 'schedule' && "${merge_type}" == 'none' ]]; then
+            printf 'build=false\n' >> "${GITHUB_OUTPUT}"
+          else
+            printf 'build=true\n' >> "${GITHUB_OUTPUT}"
+          fi
 
-      - name: Resolve image name
+      - name: Check out repository
+        if: ${{ steps.sync.outputs.build != 'false' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name != 'pull_request' && 'main' || '' }}
+
+      - name: Resolve image name and revision
+        if: ${{ steps.sync.outputs.build != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          printf 'IMAGE=ghcr.io/%s:latest\n' "${repository}" >> "${GITHUB_ENV}"
+          {
+            printf 'IMAGE=ghcr.io/%s:latest\n' "${repository}"
+            printf 'REVISION=%s\n' "$(git rev-parse HEAD)"
+          } >> "${GITHUB_ENV}"
 
       - name: Build image
+        if: ${{ steps.sync.outputs.build != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
           docker build \
             --platform linux/amd64 \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.revision=${REVISION}" \
             --tag "${IMAGE}" \
             .
 
       - name: Authenticate to the GitHub container registry
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && steps.sync.outputs.build != 'false' }}
         shell: bash
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,7 +84,7 @@ jobs:
             --password-stdin
 
       - name: Publish latest
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && steps.sync.outputs.build != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -59,6 +92,7 @@ jobs:
           digest="$(docker image inspect --format '{{ index .RepoDigests 0 }}' "${IMAGE}")"
           {
             printf '### Unduckified image\n\n'
+            printf -- '- Revision: `%s`\n' "${REVISION}"
             printf -- '- Mutable image: `%s`\n' "${IMAGE}"
             printf -- '- Immutable image: `%s`\n' "${digest}"
           } >> "${GITHUB_STEP_SUMMARY}"
