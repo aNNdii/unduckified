@@ -1,0 +1,64 @@
+name: Container image
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Resolve image name
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          printf 'IMAGE=ghcr.io/%s:latest\n' "${repository}" >> "${GITHUB_ENV}"
+
+      - name: Build image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "${IMAGE}" \
+            .
+
+      - name: Authenticate to the GitHub container registry
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${REGISTRY_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" \
+            --password-stdin
+
+      - name: Publish latest
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}"
+          digest="$(docker image inspect --format '{{ index .RepoDigests 0 }}' "${IMAGE}")"
+          {
+            printf '### Unduckified image\n\n'
+            printf -- '- Mutable image: `%s`\n' "${IMAGE}"
+            printf -- '- Immutable image: `%s`\n' "${digest}"
+          } >> "${GITHUB_STEP_SUMMARY}"

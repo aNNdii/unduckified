@@ -12,6 +12,28 @@ Add this URL as a custom search engine to your browser to use DuckDuckGo's bangs
 https://s.dunkirk.sh?q=%s
 ```
 
+## Container image
+
+GitHub Actions builds the image for every pull request and publishes
+`ghcr.io/anndii/unduckified:latest` after successful builds on `main` or a
+manual workflow run.
+
+The image serves the static client on port 80. It does not include the
+Cloudflare Pages `/suggest` function or the first-request edge redirect, so
+those parts of the sections below only apply to the upstream hosted
+deployment.
+
+```bash
+docker pull ghcr.io/anndii/unduckified:latest
+docker run --rm -p 8080:80 ghcr.io/anndii/unduckified:latest
+```
+
+To build it locally:
+
+```bash
+docker build --platform linux/amd64 -t unduckified:local .
+```
+
 ## How is it that much faster?
 
 DuckDuckGo does their redirects server side. Depending on how fast your internet connection is this can mean a network round trip that could cause a noticable delay vs directly loading the other website.
